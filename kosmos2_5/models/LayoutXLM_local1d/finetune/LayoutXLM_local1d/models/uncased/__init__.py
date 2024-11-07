@@ -1,0 +1,15 @@
+from transformers import AutoConfig, AutoModel, AutoTokenizer, AutoModelForTokenClassification
+from transformers.convert_slow_tokenizer import SLOW_TO_FAST_CONVERTERS, BertConverter
+
+from .configuration_layoutxlm_uncased import LayoutXLM_line1d_uncased_Config
+from .tokenization_layoutxlm import LayoutXLM_line1d_uncased_Tokenizer
+from .tokenization_layouxtlm_fast import LayoutXLM_line1d_uncased_TokenizerFast
+from .modeling_layoutxlm_uncased import BertModel, LayoutXLM_uncased_ForTokenClassification
+
+AutoConfig.register("layoutxlm_line1d_uncased", LayoutXLM_line1d_uncased_Config)
+AutoModel.register(LayoutXLM_line1d_uncased_Config, BertModel)
+AutoModelForTokenClassification.register(LayoutXLM_line1d_uncased_Config, LayoutXLM_uncased_ForTokenClassification)
+AutoTokenizer.register(
+    LayoutXLM_line1d_uncased_Config, slow_tokenizer_class=LayoutXLM_line1d_uncased_Tokenizer, fast_tokenizer_class=LayoutXLM_line1d_uncased_TokenizerFast
+)
+SLOW_TO_FAST_CONVERTERS.update({"LayoutXLM_line1d_uncased_Tokenizer": BertConverter})

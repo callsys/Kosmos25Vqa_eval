@@ -1,0 +1,5 @@
+datasets
+seqeval
+transformers==4.21
+sentencepiece==0.1.96
+protobuf==3.20

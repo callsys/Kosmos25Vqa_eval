@@ -1,0 +1,259 @@
+#!/usr/bin/env python
+# coding=utf-8
+# Copyright 2020 The HuggingFace Team All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+"""
+Fine-tuning the library models for masked language modeling (BERT, ALBERT, RoBERTa...) on a text file or a dataset.
+
+Here is the full list of checkpoints on the hub that can be fine-tuned by this script:
+https://huggingface.co/models?filter=masked-lm
+"""
+# You can also adapt this script on your own masked language modeling task. Pointers for this are left as comments.
+
+import logging
+import os
+import sys
+from dataclasses import dataclass, field
+from typing import Optional
+import torch 
+
+import transformers
+from layoutlmft.data.data_collator import DataCollatorForMaskedVisualLanguageModeling
+# from layoutlmft.data.datasets.cdip import CdipDataset
+from layoutlmft.data.datasets.mpdfs_full import mpdfsFullDataset
+# from layoutlmft.models.layoutlmcased import LayoutLMCasedConfig, LayoutLMCasedForMaskedLM, LayoutLMCasedTokenizer
+from transformers import HfArgumentParser, Trainer, TrainingArguments, set_seed
+from transformers.trainer_utils import get_last_checkpoint, is_main_process
+from transformers.utils import check_min_version
+from transformers import XLMRobertaForMaskedLM
+from layoutlmft.models.layoutxlm import LayoutXLMConfig, LayoutXLMForMaskedLM, LayoutXLMTokenizer
+
+# Will error if the minimal version of Transformers is not installed. Remove at your own risks.
+check_min_version("4.12.5")
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ModelArguments:
+    """
+    Arguments pertaining to which model/config/tokenizer we are going to fine-tune, or train from scratch.
+    """
+
+    model_name_or_path: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "The model checkpoint for weights initialization."
+            "Don't set if you want to train a model from scratch."
+        },
+    )
+    model_type: Optional[str] = field(
+        default=None,
+    )
+    config_name: Optional[str] = field(
+        default=None, metadata={"help": "Pretrained config name or path if not the same as model_name"}
+    )
+    tokenizer_name: Optional[str] = field(
+        default=None, metadata={"help": "Pretrained tokenizer name or path if not the same as model_name"}
+    )
+    cache_dir: Optional[str] = field(
+        default=None,
+        metadata={"help": "Where do you want to store the pretrained models downloaded from huggingface.co"},
+    )
+    use_fast_tokenizer: bool = field(
+        default=True,
+        metadata={"help": "Whether to use one of the fast tokenizer (backed by the tokenizers library) or not."},
+    )
+    model_revision: str = field(
+        default="main",
+        metadata={"help": "The specific model version to use (can be a branch name, tag name or commit id)."},
+    )
+    use_auth_token: bool = field(
+        default=False,
+        metadata={
+            "help": "Will use the token generated when running `transformers-cli login` (necessary to use this script "
+            "with private models)."
+        },
+    )
+    layout_embedding_type: str = field(default="v2")
+    layout_embedding_v2_coordinate_size: Optional[int] = field(default=128)
+    layout_embedding_v2_shape_size: Optional[int] = field(default=128)
+
+    def __post_init__(self):
+        if self.layout_embedding_type != "v2":
+            self.layout_embedding_v2_coordinate_size = None
+            self.layout_embedding_v2_shape_size = None
+
+
+@dataclass
+class DataTrainingArguments:
+    """
+    Arguments pertaining to what data we are going to input our model for training and eval.
+    """
+    data_dir: Optional[str] = field(default=None)
+    dataset_size: Optional[int] = field(default=None)
+    overwrite_cache: bool = field(
+        default=False, metadata={"help": "Overwrite the cached training and evaluation sets"}
+    )
+    max_seq_length: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "The maximum total input sequence length after tokenization. Sequences longer "
+            "than this will be truncated."
+        },
+    )
+    preprocessing_num_workers: Optional[int] = field(
+        default=None,
+        metadata={"help": "The number of processes to use for the preprocessing."},
+    )
+    mlm_probability: float = field(
+        default=0.15, metadata={"help": "Ratio of tokens to mask for masked language modeling loss"}
+    )
+    pad_to_max_length: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to pad all samples to `max_seq_length`. "
+            "If False, will pad the samples dynamically when batching to the maximum length in the batch."
+        },
+    )
+    max_train_samples: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "For debugging purposes or quicker training, truncate the number of training examples to this "
+            "value if set."
+        },
+    )
+    max_eval_samples: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "For debugging purposes or quicker training, truncate the number of evaluation examples to this "
+            "value if set."
+        },
+    )
+    segment_layout_embedding: bool = field(default=True)
+    skip_sample_num: Optional[int] = field(
+        default=0,
+        metadata={
+            "help": "For debugging purposes or quicker training, truncate the number of evaluation examples to this "
+                    "value if set."
+        },
+    )
+
+def main():
+    # See all possible arguments in src/transformers/training_args.py
+    # or by passing the --help flag to this script.
+    # We now keep distinct sets of args, for a cleaner separation of concerns.
+
+    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
+    if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
+        # If we pass only one argument to the script and it's the path to a json file,
+        # let's parse it to get our arguments.
+        model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
+    else:
+        model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+
+    import random
+    training_args.seed = random.randint(0, 1000)
+
+    data_args.seed = training_args.seed
+    data_args.local_rank = training_args.local_rank
+
+    # Detecting last checkpoint.
+    last_checkpoint = None
+
+    # Setup logging
+    logging.basicConfig(
+        format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
+        datefmt="%m/%d/%Y %H:%M:%S",
+        handlers=[logging.StreamHandler(sys.stdout)],
+    )
+    logger.setLevel(logging.INFO if is_main_process(training_args.local_rank) else logging.WARN)
+
+    # Log on each process the small summary:
+    logger.warning(
+        f"Process rank: {training_args.local_rank}, device: {training_args.device}, n_gpu: {training_args.n_gpu}"
+        + f"distributed training: {bool(training_args.local_rank != -1)}, 16-bits training: {training_args.fp16}"
+    )
+    # Set the verbosity to info of the Transformers logger (on main process only):
+    if is_main_process(training_args.local_rank):
+        if os.path.exists(training_args.output_dir) == False:
+            os.makedirs(training_args.output_dir)
+        transformers.utils.logging.add_handler(
+            logging.FileHandler(os.path.join(training_args.output_dir, "train.log"), mode="w")
+        )
+        transformers.utils.logging.set_verbosity_info()
+        transformers.utils.logging.enable_default_handler()
+        transformers.utils.logging.enable_explicit_format()
+    logger.info(f"Training/evaluation parameters {training_args}")
+
+    # Set seed before initializing model.
+    set_seed(training_args.seed)
+
+    tokenizer = LayoutXLMTokenizer.from_pretrained(model_args.model_name_or_path)
+
+    model = LayoutXLMForMaskedLM.from_pretrained(
+        model_args.model_name_or_path,
+        layout_embedding_type=model_args.layout_embedding_type,
+        coordinate_size=model_args.layout_embedding_v2_coordinate_size,
+        shape_size=model_args.layout_embedding_v2_shape_size,
+        has_relative_attention_bias=True,
+        has_spatial_attention_bias=True,
+    )
+
+    if training_args.do_train:
+        train_dataset = mpdfsFullDataset(data_args, tokenizer)
+
+    # Data collator
+    # This one will take care of randomly masking the tokens.
+    data_collator = DataCollatorForMaskedVisualLanguageModeling(
+        tokenizer=tokenizer,
+        mlm_probability=data_args.mlm_probability,
+    )
+
+    n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print("Model = %s" % str(model))
+    print("number of params:", n_parameters)
+
+    # Initialize our Trainer
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_dataset if training_args.do_train else None,
+        tokenizer=tokenizer,
+        data_collator=data_collator,
+    )
+
+    # Training
+    if training_args.do_train:
+        train_result = trainer.train()
+        trainer.save_model()
+        metrics = train_result.metrics
+
+        max_train_samples = (
+            data_args.max_train_samples if data_args.max_train_samples is not None else len(train_dataset)
+        )
+        metrics["train_samples"] = min(max_train_samples, len(train_dataset))
+
+        trainer.log_metrics("train", metrics)
+        trainer.save_metrics("train", metrics)
+        trainer.save_state()
+
+
+def _mp_fn(index):
+    # For xla_spawn (TPUs)
+    main()
+
+
+if __name__ == "__main__":
+    main()

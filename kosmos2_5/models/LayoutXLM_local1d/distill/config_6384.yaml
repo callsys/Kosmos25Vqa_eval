@@ -1,0 +1,92 @@
+target:
+  service: amlk8s
+  subscription_id: 48b6cd5e-3ffe-4c2e-9e99-5760a42cd093
+  resource_group: vision-itp-ocr
+  workspace_name: vision-itp-ocr-res-ws01-westus2
+  cluster: v100-32gb-wus2
+  vc: vision-itp-ocr-res
+
+environment:
+  image: azureml/openmpi3.1.2-cuda10.1-cudnn7-ubuntu18.04:latest
+  setup:
+    - rm -rf ~/tensorboard && mkdir -p ~/tensorboard && ln -Ts $$AMLT_OUTPUT_DIR ~/tensorboard/$$DLTS_JOB_ID
+    - pip install -r requirements.txt
+    - pip install .
+code:
+  local_dir: $CONFIG_DIR/src
+
+search:
+  job_template:
+    name: distill 
+    sku_count: 4
+    sku: G8
+    aml_mpirun:
+      communicator: "OpenMpi"
+    command:
+      - python -m torch.distributed.launch --nproc_per_node=8
+        --nnodes=4 --node_rank=$$RANK --master_addr=$$MASTER_ADDR
+        --master_port=$$MASTER_PORT examples/run_distill.py
+        --layout_embedding_type {let}
+        --data_dir /mnt/mpdf/dataset/multilingualPDF
+        --do_train
+        --per_device_train_batch_size {bs}
+        --gradient_accumulation_steps {gas}
+        --warmup_ratio {wr}
+        --logging_steps 100
+        --learning_rate {lr}
+        --weight_decay 0.01
+        --adam_beta1 0.9
+        --adam_beta2 0.98
+        --adam_epsilon 1e-6
+        --save_steps 10000
+        --max_steps {ms}
+        --dataloader_num_workers 16
+        --output_dir path/to/save 
+        --report_to tensorboard
+        --max_grad_norm 1.0
+        --layout_embedding_v2_coordinate_size 171
+        --layout_embedding_v2_shape_size 170
+        --stu_layout_embedding_v2_coordinate_size 64
+        --stu_layout_embedding_v2_shape_size 64
+        --tea_model_weight /mnt/conversationhub/projects/layoutxlm/output/layoutxlm_large_exclude1d_400m_bs_4_gas_2_lr_2e-5_wr_0.02_ms_1000000_pt_clean_590k_continue_76las_wus_64_fp32/checkpoint-500000/pytorch_model.bin
+        --stu_model_weight /mnt/mpdf/models/offical_models/xlmr.{stu_num_hidden_layers}{stu_hidden_size}/pytorch_model.bin
+        --stu_hidden_size {stu_hidden_size}
+        --stu_intermediate_size {stu_intermediate_size}
+        --stu_num_attention_heads {stu_num_attention_heads}
+        --stu_num_hidden_layers {stu_num_hidden_layers}
+        --ignore_data_skip True
+        --seed 44
+        --fp16
+  type: random
+  max_trials: 1
+  params:
+    - name: let
+      spec: discrete
+      values: [ "v2" ]
+    - name: bs
+      spec: discrete
+      values: [ 8 ]
+    - name: gas
+      spec: discrete
+      values: [ 8 ]
+    - name: lr
+      spec: discrete
+      values: [ 5e-4 ]
+    - name: wr
+      spec: discrete
+      values: [ 0.01 ]
+    - name: ms
+      spec: discrete
+      values: [ 1000000 ]
+    - name: stu_hidden_size
+      spec: discrete
+      values: [ 384 ]
+    - name: stu_intermediate_size
+      spec: discrete
+      values: [ 1536 ]
+    - name: stu_num_attention_heads
+      spec: discrete
+      values: [ 12 ]
+    - name: stu_num_hidden_layers
+      spec: discrete
+      values: [ 6 ]

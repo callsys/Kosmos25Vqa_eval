@@ -1,0 +1,84 @@
+environment:
+  image: ranpox/pytorch:1.8.1-cuda10.1-apex
+  setup:
+    - rm -rf ~/tensorboard && mkdir -p ~/tensorboard && ln -Ts $$AMLT_OUTPUT_DIR ~/tensorboard/$$DLTS_JOB_ID
+    - pip install -r requirements.txt
+    - pip install .
+
+code:
+  local_dir: $CONFIG_DIR/src
+
+storage:
+  output:
+    storage_account_name: conversationhub
+    container_name: yihengxu
+    mount_dir: /mnt/output
+  conversationhub:
+    storage_account_name: conversationhub
+    container_name: yihengxu
+    mount_dir: /mnt/conversationhub
+  readindl:
+    storage_account_name: readindl
+    container_name: yihengxu
+    mount_dir: /mnt/readindl
+  cdip:
+    storage_account_name: layoutlm
+    container_name: cdip
+    mount_dir: /mnt/cdip
+
+search:
+  job_template:
+    name: layoutlmpt_ablation_1m_{experiment_name:s}_{auto:s}_{random_string:s}
+    sku: 1xG8-V100
+    aml_mpirun:
+      process_count_per_node: 8
+      communicator: "OpenMpi"
+    command:
+      - python examples/run_pt.py
+        --model_name_or_path {mnop}
+        --layout_embedding_type {let}
+        --data_dir /mnt/cdip
+        --dataset_size 1000000
+        --do_train
+        --per_device_train_batch_size {bs}
+        --gradient_accumulation_steps {gas}
+        --warmup_ratio {wr}
+        --logging_steps 100
+        --learning_rate {lr}
+        --weight_decay 0.01
+        --adam_beta1 0.9
+        --adam_beta2 0.98
+        --adam_epsilon 1e-6
+        --save_steps 10000
+        --max_steps {ms}
+        --dataloader_num_workers 8
+        --output_dir $$AMLT_OUTPUT_DIR
+        --report_to tensorboard
+        --fp16
+        --fp16_backend apex
+        --fp16_opt_level O2
+#        --deepspeed ds_config.json
+  type: random
+  max_trials: 1
+  params:
+    - name: mnop
+      spec: discrete
+      values: [ "roberta-base" ]
+    - name: let
+      spec: discrete
+      values: [ "v2" ]
+    - name: bs
+      spec: discrete
+      values: [ 32 ]
+    - name: gas
+      spec: discrete
+      values: [ 1 ]
+    - name: lr
+      spec: discrete
+      values: [ 1e-4 ]
+    - name: wr
+      spec: discrete
+      values: [ 0.048 ]
+    - name: ms
+      spec: discrete
+      values: [ 150000 ]
