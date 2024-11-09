@@ -179,9 +179,6 @@ def anls_metric_str(predictions, gold_labels, tau=0.5, rank=0):
 # docvqa, question, answer
 if __name__ == '__main__':
     args = get_args()
-    oai_clients = Openai(
-        apis=API_INFOS
-    )
     
     # prepare data
     vqa_data = json.load(open("/mnt/msranlp/yuzhongzhao/docvqa_kosmos/DocVQA/dataset/kosmos_d/vqa/test.json"))
@@ -193,6 +190,11 @@ if __name__ == '__main__':
     if args.num_sample > 0:
         samples = samples[:args.num_sample]
     samples = samples[cur_shard::num_shard]
+
+    # init the OpenAI client based on shard
+    oai_clients = Openai(
+        apis=[API_INFOS[cur_shard % len(API_INFOS)]]
+    )
 
     # evaluation
     gt_pred_pairs = []
